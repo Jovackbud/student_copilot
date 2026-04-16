@@ -237,6 +237,9 @@ function App() {
     if (currentUser) localStorage.removeItem(`jwt_${currentUser}`);
     setCurrentUser(null);
     setCurrentRole(null);
+    setConvId(null);
+    setMessages([]);
+    setProfile({ name: '', age: '', country: '', grade: '' });
   };
 
   if (!currentUser) {

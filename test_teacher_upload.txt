@@ -1,0 +1,87 @@
+# Biology Study Guide: Cellular Respiration (WAEC/NECO Standard)
+
+## 1. Introduction: What is Cellular Respiration?
+Imagine you just finished eating a heavy plate of eba and egusi soup. That food contains a lot of energy, mostly as glucose (sugar). But your cells cannot use the eba directly to give you energy to play football or study for your exams. 
+
+Cellular Respiration is the process where your body breaks down that glucose to release energy. The cells package this energy into a molecule called ATP (Adenosine Triphosphate). Think of food like crude oil, and ATP like the refined petrol you put in a generator. Your body runs on ATP, not raw food!
+
+The general equation for aerobic respiration (respiration that uses oxygen) is:
+Glucose + Oxygen → Carbon Dioxide + Water + Energy (ATP + Heat)
+
+There are three main stages to get this full energy:
+1. Glycolysis
+2. Krebs Cycle
+3. Electron Transport Chain
+
+---
+
+## 2. Stage 1: Glycolysis
+Where it happens: In the cytoplasm (the jelly-like fluid inside the cell).
+Does it need Oxygen?: No (it is anaerobic).
+
+What happens?
+Think of Glycolysis as breaking a large 6-carbon glucose block into two smaller 3-carbon pieces called Pyruvate. 
+To do this, the cell must first invest a little "money" (2 ATP). After breaking the glucose, the cell makes a profit of 4 ATP. 
+
+What we gain from one glucose:
+- 2 Pyruvate molecules
+- 2 ATP (Profit: 4 made - 2 invested)
+- 2 NADH (These are like bank cheques we will cash in later for more ATP)
+
+---
+
+## 3. The Middle Step: Pyruvate Oxidation
+Where it happens: Moving into the Mitochondria (the "powerhouse" or generator house of the cell).
+Does it need Oxygen?: Yes, it requires oxygen to be present down the line.
+
+What happens?
+Before the Pyruvate can enter the big generator (Krebs Cycle), it needs to be prepped. It loses a carbon atom (breathed out as Carbon Dioxide) and turns into a 2-carbon molecule called Acetyl-CoA. We also get 2 more NADH "cheques".
+
+---
+
+## 4. Stage 2: The Krebs Cycle (Citric Acid Cycle)
+Where it happens: Inside the matrix of the Mitochondria.
+Does it need Oxygen?: Yes (Aerobic).
+
+What happens?
+The Acetyl-CoA enters a spinning wheel of chemical reactions. For every glucose molecule, this wheel turns twice. It strips out electrons and carbons to get all the hidden energy out. 
+
+What we gain after 2 turns:
+- 4 Carbon Dioxide (we exhale this)
+- 2 ATP (Cash at hand!)
+- 6 NADH and 2 FADH2 (More bank cheques full of electrons!)
+
+---
+
+## 5. Stage 3: The Electron Transport Chain (ETC)
+Where it happens: On the inner wall (membrane) of the Mitochondria.
+Does it need Oxygen?: Absolutely! Oxygen is the final catcher of the electrons. If oxygen doesn't catch them, the whole process stops.
+
+What happens?
+This is where we go to the "bank" to cash all our NADH and FADH2 cheques. 
+The electrons from these carriers are passed down a chain, like passing a bucket of water down a line of people. As the electrons move, they release energy to pump protons (H+) across the wall. 
+Finally, these protons rush back through a special enzyme called ATP Synthase. It works exactly like the turbines at the Kainji Dam—as the protons flow through, it spins and generates massive amounts of ATP!
+
+What we gain:
+- About 26 to 28 ATP! This is the jackpot.
+- Water (H2O), formed when Oxygen catches the final electrons and joins with Hydrogen.
+
+---
+
+## 6. Summary of Energy Production
+From just ONE molecule of glucose, aerobic respiration gives us:
+- Glycolysis: 2 ATP
+- Krebs Cycle: 2 ATP
+- Electron Transport Chain: 26 to 28 ATP
+Total: About 30 to 32 ATP. 
+
+---
+
+## 7. What Happens Without Oxygen? (Fermentation)
+Imagine you are sprinting very fast to catch a commercial bus (danfo). You are breathing hard, but your muscle cells can't get oxygen fast enough. 
+
+Instead of shutting down, your cells use Lactic Acid Fermentation. They only run Glycolysis to get a quick 2 ATP and convert the pyruvate into Lactic Acid. The buildup of this lactic acid is what makes your leg muscles burn and ache when running!
+
+For microorganisms like yeast, when there is no oxygen, they do Alcoholic Fermentation. They turn the glucose into alcohol and Carbon Dioxide. This is the exact science used to brew palm wine or make bread rise!
+
+[End of Study Guide]

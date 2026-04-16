@@ -68,7 +68,12 @@ def _ensure_pinecone_index() -> None:
         logger.error(f"[startup] Pinecone client import failed: {e}")
         return
 
-    dim = 768 if LLM_PROVIDER == "gemini" else 1536
+    try:
+        test_embed = embeddings.embed_documents(["test"])
+        dim = len(test_embed[0])
+    except Exception as e:
+        logger.warning(f"[startup] Dynamic dim detection failed. Fallback: {e}")
+        dim = 768 if LLM_PROVIDER == "gemini" else 1536
 
     try:
         pc = Pinecone(api_key=PINECONE_API_KEY)

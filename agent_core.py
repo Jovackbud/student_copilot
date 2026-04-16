@@ -1,18 +1,27 @@
-# agent_core.py - Production-hardened agent with direct user_id routing
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables.history import RunnableWithMessageHistory
+# agent_core.py — Sovereign tool-calling agent (zero framework dependency)
+# All langchain agent factories (create_agent, create_tool_calling_agent,
+# create_react_agent) now internally produce LangGraph CompiledStateGraphs
+# that expect {"messages": [...]} input. This is fundamentally incompatible
+# with the RunnableWithMessageHistory wrapping that passes dict-based inputs
+# {"input", "chat_history", "user_profile", "file_summaries"}.
+#
+# Solution: Manual tool-calling loop via RunnableLambda. Full control,
+# zero volatility, proper prompt rendering, complete tool execution.
 
-from typing import Dict, Any, Optional, Callable
-from functools import partial
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.messages import ToolMessage
+
+from typing import Dict, Any
 
 from llm_setup import llm
 from tools_setup import tools
 from session_manager import get_conversation_history, SESSIONS
-from config import logger, AGENT_VERBOSE
+from config import logger
 
-
-SYSTEM_PROMPT = """
+# ─── SYSTEM PROMPT ──────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """\
 You are a friendly and knowledgeable AI tutor designed to answer children's questions appropriately for their age, country, and school grade.
 
 **How to Answer:**
@@ -25,71 +34,73 @@ You are a friendly and knowledgeable AI tutor designed to answer children's ques
 
 **Current Context:**
 - User Profile: `{user_profile}`
-- Uploaded Summaries: `{file_summaries}`
+- Uploaded Summaries: `{file_summaries}`\
 """
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ]
-)
+# Prompt template: system + history + user input (no agent_scratchpad needed)
+_prompt = ChatPromptTemplate.from_messages([
+    ("system", SYSTEM_PROMPT),
+    MessagesPlaceholder(variable_name="chat_history"),
+    ("user", "{input}"),
+])
 
-# ─── RESILIENT AGENT CONSTRUCTION ──────────────────────────────────────────
-# langchain.agents API is extremely volatile. We pivot through multiple layers:
-# 1. Modern unified create_agent (if available)
-# 2. LangGraph prebuilt (The modern standard)
-# 3. LangChain Classic (Legacy fallback)
-# 4. Direct tool-bound chain (Minimal fallback)
+# ─── SOVEREIGN TOOL-CALLING LOOP ───────────────────────────────────────────
+_llm_with_tools = llm.bind_tools(tools) if tools else llm
+_tool_map: Dict[str, Any] = {t.name: t for t in tools} if tools else {}
+_MAX_TOOL_ITERATIONS = 5
 
-_agent_executor = None
 
-try:
-    # Attempt 1: Modern create_agent (unified factory)
-    from langchain.agents import create_agent
-    _agent_executor = create_agent(llm, tools, system_prompt=SYSTEM_PROMPT)
-    logger.info("[agent_core] Agent initialized via langchain.agents.create_agent factory.")
-except (ImportError, AttributeError):
-    try:
-        # Attempt 2: LangGraph React Agent (Modern standard for tool loops)
-        from langgraph.prebuilt import create_react_agent
-        # Note: LangGraph agents handle prompts differently; we use a simple wrapper or binding
-        _agent_executor = create_react_agent(llm, tools, state_modifier=SYSTEM_PROMPT)
-        logger.info("[agent_core] Agent initialized via langgraph.prebuilt.create_react_agent.")
-    except (ImportError, Exception):
-        try:
-            # Attempt 3: Legacy AgentExecutor (via Classic or standard)
-            try:
-                from langchain.agents import create_tool_calling_agent, AgentExecutor
-            except ImportError:
-                from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
-            
-            agent = create_tool_calling_agent(llm, tools, prompt)
-            _agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=AGENT_VERBOSE, handle_parsing_errors=True)
-            logger.info("[agent_core] Agent initialized via AgentExecutor (Classic/Legacy path).")
-        except (ImportError, Exception) as e:
-            logger.warning(f"[agent_core] All agent factories failed ({e}); using direct LLM chain (minimal tools).")
+async def _sovereign_agent(input_dict: dict, config=None) -> dict:
+    """
+    Manual tool-calling agent loop.
+    Renders prompt → calls LLM → executes any tool calls → loops until text response.
+    Fully compatible with RunnableWithMessageHistory's dict-based input.
+    """
+    # 1. Render the prompt template into messages
+    rendered = _prompt.invoke({
+        "input": input_dict.get("input", ""),
+        "chat_history": input_dict.get("chat_history", []),
+        "user_profile": input_dict.get("user_profile", "no profile provided"),
+        "file_summaries": input_dict.get("file_summaries", "no uploaded file summaries"),
+    })
+    messages = list(rendered.to_messages())
 
-if _agent_executor is None:
-    # Final fallback: direct LLM chain with tools bound. No agent loop/reasoning.
-    from langchain_core.runnables import RunnableLambda
-    _llm_with_tools = llm.bind_tools(tools) if tools else llm
-    _direct_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "{input}"),
-    ])
-    _agent_executor = (
-        _direct_prompt
-        | _llm_with_tools
-        | StrOutputParser()
-        | RunnableLambda(lambda x: {"output": x})
-    )
-    logger.info("[agent_core] Agent initialized via direct LLM chain fallback.")
+    # 2. Tool-calling loop (bounded)
+    response = None
+    for iteration in range(_MAX_TOOL_ITERATIONS):
+        response = await _llm_with_tools.ainvoke(messages, config=config)
+        messages.append(response)
 
-agent_executor = _agent_executor
+        tool_calls = getattr(response, "tool_calls", None)
+        if not tool_calls:
+            break  # No tool calls — we have the final text response
+
+        logger.info(f"[agent_core] Iteration {iteration + 1}: executing {len(tool_calls)} tool call(s).")
+        for tc in tool_calls:
+            tool_fn = _tool_map.get(tc["name"])
+            if tool_fn:
+                try:
+                    result = await tool_fn.ainvoke(tc["args"])
+                except Exception as e:
+                    logger.error(f"[agent_core] Tool '{tc['name']}' error: {e}")
+                    result = f"Tool execution failed: {e}"
+            else:
+                logger.warning(f"[agent_core] Unknown tool requested: {tc['name']}")
+                result = f"Unknown tool: {tc['name']}"
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+
+    # 3. Extract final text output
+    output = ""
+    if response is not None:
+        output = getattr(response, "content", "") or ""
+    if not output:
+        output = "I couldn't generate a response. Please try again."
+
+    return {"output": output}
+
+
+agent_executor = RunnableLambda(_sovereign_agent)
+logger.info("[agent_core] Sovereign agent initialized (manual tool loop, zero agent-factory deps).")
 
 
 # --- FIX C1: Direct O(1) lookup instead of O(n) linear scan ---
