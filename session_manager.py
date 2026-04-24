@@ -55,151 +55,138 @@ def _get_title_key(conversation_id: str) -> str:
     return f"conversation:{conversation_id}:title"
 
 
-# --- Redis Data Load/Save Functions ---
-def load_conversation_data_from_redis(conversation_id: str) -> Dict[str, Any]:
-    """Loads user profile and summaries for a specific conversation from Redis."""
-    if redis_client is None:
-        logger.error("[session_manager] Redis client not initialized when attempting to load conversation data.")
-        return {"profile": {}, "summaries": [], "title": "Untitled Chat"}
-
+# --- Database Data Load/Save Functions ---
+def load_conversation_data_from_db(conversation_id: str) -> Dict[str, Any]:
+    """Loads user profile and summaries for a specific conversation from Supabase (or cached Redis)."""
+    from database import get_supabase
+    
     profile = {}
     summaries = []
     title = "Untitled Chat"
 
-    try:
-        profile_json = redis_client.get(_get_profile_key(conversation_id))
-        if profile_json:
-            profile = json.loads(profile_json)
-            logger.info(f"[session_manager] Loaded profile for conversation {conversation_id} from Redis.")
+    supabase = get_supabase()
+    if supabase:
+        try:
+            res = supabase.table('conversations').select('*').eq('id', conversation_id).execute()
+            if res.data:
+                conv = res.data[0]
+                profile = conv.get("profile_override", {}) or {}
+                summaries = conv.get("summaries", []) or []
+                title = conv.get("title", "Untitled Chat") or "Untitled Chat"
+                return {"profile": profile, "summaries": summaries, "title": title}
+        except Exception as e:
+            logger.error(f"[session_manager] Supabase load error for {conversation_id}: {e}")
 
-        summaries_json = redis_client.get(_get_summaries_key(conversation_id))
-        if summaries_json:
-            summaries = json.loads(summaries_json)
-            logger.info(f"[session_manager] Loaded summaries for conversation {conversation_id} from Redis.")
-
-        title_bytes = redis_client.get(_get_title_key(conversation_id))
-        if title_bytes:
-            title = title_bytes.decode('utf-8')
-            logger.info(f"[session_manager] Loaded title for conversation {conversation_id} from Redis.")
-
-    except Exception as e:
-        logger.error(f"[session_manager] Error loading conversation data for {conversation_id} from Redis: {e}")
-        profile = {}
-        summaries = []
+    # Fallback to Redis if Supabase is offline or conv is legacy
+    if redis_client:
+        try:
+            profile_json = redis_client.get(_get_profile_key(conversation_id))
+            if profile_json: profile = json.loads(profile_json)
+            summaries_json = redis_client.get(_get_summaries_key(conversation_id))
+            if summaries_json: summaries = json.loads(summaries_json)
+            title_bytes = redis_client.get(_get_title_key(conversation_id))
+            if title_bytes: title = title_bytes.decode('utf-8')
+        except Exception as e:
+            logger.error(f"[session_manager] Error loading fallback Redis data: {e}")
 
     return {"profile": profile, "summaries": summaries, "title": title}
 
+def save_conversation_data_to_db(conversation_id: str, profile: Dict[str, Any], summaries: List[Dict[str, Any]], title: str):
+    """Saves user profile and summaries for a specific conversation to Supabase (and cache)."""
+    from database import get_supabase
+    import datetime
+    supabase = get_supabase()
 
-def save_conversation_data_to_redis(conversation_id: str, profile: Dict[str, Any], summaries: List[Dict[str, Any]], title: str):
-    """Saves user profile and summaries for a specific conversation to Redis."""
-    if redis_client is None:
-        logger.error("[session_manager] Redis client not initialized when attempting to save conversation data.")
-        return
+    if supabase:
+        try:
+            supabase.table('conversations').update({
+                "profile_override": profile,
+                "summaries": summaries,
+                "title": title,
+                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            }).eq('id', conversation_id).execute()
+        except Exception as e:
+            logger.error(f"[session_manager] Supabase save error for {conversation_id}: {e}")
 
-    ttl = CONVERSATION_TTL_SECONDS if CONVERSATION_TTL_SECONDS > 0 else None
-    try:
-        profile_key = _get_profile_key(conversation_id)
-        redis_client.set(profile_key, json.dumps(profile), ex=ttl)
-
-        summaries_key = _get_summaries_key(conversation_id)
-        redis_client.set(summaries_key, json.dumps(summaries), ex=ttl)
-
-        title_key = _get_title_key(conversation_id)
-        redis_client.set(title_key, title, ex=ttl)
-
-        logger.info(f"[session_manager] Saved conversation data for {conversation_id} (TTL={ttl}s).")
-    except Exception as e:
-        logger.error(f"[session_manager] Error saving conversation data for {conversation_id} to Redis: {e}")
+    # Mirror to Redis cache for active fast reloads
+    if redis_client:
+        ttl = CONVERSATION_TTL_SECONDS if CONVERSATION_TTL_SECONDS > 0 else None
+        try:
+            redis_client.set(_get_profile_key(conversation_id), json.dumps(profile), ex=ttl)
+            redis_client.set(_get_summaries_key(conversation_id), json.dumps(summaries), ex=ttl)
+            redis_client.set(_get_title_key(conversation_id), title, ex=ttl)
+        except Exception:
+            pass
 
 
 # --- User Global Data ---
-def _get_user_learning_method_key(user_id: str) -> str:
-    return f"user:{user_id}:learning_method"
-
 def load_user_learning_method(user_id: str) -> Optional[str]:
-    """Loads a user's globally shared learning method from Redis."""
-    if redis_client is None:
-        return None
-    try:
-        val = redis_client.get(_get_user_learning_method_key(user_id))
-        return val.decode('utf-8') if val else None
-    except Exception as e:
-        logger.error(f"[session_manager] Error loading global learning method for {user_id}: {e}")
-        return None
+    """Loads a user's globally shared learning method from Supabase."""
+    from database import get_supabase
+    supabase = get_supabase()
+    if supabase:
+        try:
+            res = supabase.table('users').select('learning_method').eq('username', user_id).execute()
+            if res.data:
+                return res.data[0].get("learning_method")
+        except Exception:
+            pass
+    return None
 
 def save_user_learning_method(user_id: str, method: str):
-    """Saves a user's globally shared learning method to Redis."""
-    if redis_client is None:
-        return
-    lm_ttl = LEARNING_METHOD_TTL_SECONDS if LEARNING_METHOD_TTL_SECONDS > 0 else None
-    try:
-        if method:
-            redis_client.set(_get_user_learning_method_key(user_id), method, ex=lm_ttl)
-            logger.info(f"[session_manager] Saved global learning method for {user_id} (TTL={lm_ttl}s).")
-    except Exception as e:
-        logger.error(f"[session_manager] Error saving global learning method for {user_id}: {e}")
+    """Saves a user's globally shared learning method to Supabase."""
+    from database import get_supabase
+    supabase = get_supabase()
+    if supabase and method:
+        try:
+            supabase.table('users').update({'learning_method': method}).eq('username', user_id).execute()
+            logger.info(f"[session_manager] Saved global learning method for {user_id} to DB.")
+        except Exception as e:
+            logger.error(f"[session_manager] Error saving generic learning method for {user_id}: {e}")
 
 
 # --- Conversation Management ---
 def create_new_conversation_id(user_id: str, initial_title: str = "Untitled Chat") -> str:
-    """Generates a new conversation ID and associates it with the user."""
-    if redis_client is None:
-        logger.error("[session_manager] Redis client not initialized. Cannot create new conversation.")
-        raise RuntimeError("Redis client is not initialized.")
+    """Generates a new conversation ID and associates it with the user in Supabase."""
+    from database import get_supabase
+    supabase = get_supabase()
+    if not supabase:
+        raise RuntimeError("Database persistence not configured.")
 
     conversation_id = str(uuid.uuid4())
-    ttl = CONVERSATION_TTL_SECONDS if CONVERSATION_TTL_SECONDS > 0 else None
     try:
-        redis_client.sadd(_get_user_conversations_key(user_id), conversation_id)
-        redis_client.set(_get_title_key(conversation_id), initial_title, ex=ttl)
-        logger.info(f"[session_manager] Created conversation {conversation_id} for {user_id} (TTL={ttl}s).")
+        supabase.table('conversations').insert({
+            "id": conversation_id,
+            "user_id": user_id,
+            "title": initial_title,
+            "profile_override": {},
+            "summaries": []
+        }).execute()
+        
+        # Mirror user ownership to Redis for quick ownership checks
+        if redis_client:
+            redis_client.sadd(f"user:{user_id}:conversations", conversation_id)
+            
+        logger.info(f"[session_manager] Created conversation {conversation_id} for {user_id} in DB.")
         return conversation_id
     except Exception as e:
         logger.error(f"[session_manager] Error creating conversation {conversation_id} for {user_id}: {e}")
-        raise RuntimeError(f"Failed to create new conversation for user {user_id}: {e}")
-
+        raise RuntimeError(f"Failed to create new conversation: {e}")
 
 def get_user_conversation_ids(user_id: str) -> List[Dict[str, str]]:
-    """Retrieves all conversation IDs for a given user, pruning expired ghosts."""
-    if redis_client is None:
-        logger.error("[session_manager] Redis client not initialized. Cannot list conversations.")
+    """Retrieves all conversation IDs and titles for a given user from Supabase."""
+    from database import get_supabase
+    supabase = get_supabase()
+    if not supabase:
         return []
 
     try:
-        user_key = _get_user_conversations_key(user_id)
-        conv_ids_bytes = redis_client.smembers(user_key)
-        conv_ids = [c.decode('utf-8') for c in conv_ids_bytes]
-
-        if not conv_ids:
-            return []
-
-        # M10 fix: batch fetch all titles in a single pipeline round-trip
-        pipe = redis_client.pipeline(transaction=False)
-        for conv_id in conv_ids:
-            pipe.get(_get_title_key(conv_id))
-        titles = pipe.execute()
-
-        conversations_with_titles = []
-        ghost_ids = []
-
-        for conv_id, title in zip(conv_ids, titles):
-            if title is not None:
-                conversations_with_titles.append({
-                    "id": conv_id,
-                    "title": title.decode('utf-8') if title else "Untitled Chat"
-                })
-            else:
-                ghost_ids.append(conv_id)
-
-        # Prune ghost IDs from the user's set to prevent unbounded growth
-        if ghost_ids:
-            redis_client.srem(user_key, *ghost_ids)
-            logger.info(f"[session_manager] Pruned {len(ghost_ids)} expired conversations for user {user_id}.")
-
-        logger.info(f"[session_manager] Retrieved {len(conversations_with_titles)} active conversations for user {user_id}.")
-        return conversations_with_titles
+        res = supabase.table('conversations').select('id, title').eq('user_id', user_id).order('created_at', desc=True).execute()
+        if res.data:
+            return [{"id": row["id"], "title": row.get("title", "Untitled Chat")} for row in res.data]
+        return []
     except Exception as e:
-        logger.error(f"[session_manager] Error retrieving conversations for user {user_id}: {e}")
+        logger.error(f"[session_manager] Error retrieving DB conversations for {user_id}: {e}")
         return []
 
 
@@ -222,9 +209,24 @@ def get_conversation_history(user_id: str, conversation_id: str) -> Optional[Red
 
     # Enforce ownership: conversation_id must belong to the user
     try:
-        if not redis_client.sismember(_get_user_conversations_key(user_id), conversation_id):
-            logger.warning(f"[session] Conversation {conversation_id} not found for user {user_id}.")
-            return None
+        is_member = redis_client.sismember(_get_user_conversations_key(user_id), conversation_id)
+        if not is_member:
+            # BUG-03 fix: Fallback to Supabase when Redis set is lost (flush/restart)
+            from database import get_supabase
+            supabase = get_supabase()
+            if supabase:
+                try:
+                    res = supabase.table('conversations').select('id').eq('id', conversation_id).eq('user_id', user_id).execute()
+                    if res.data:
+                        # Re-sync ownership to Redis for future fast lookups
+                        redis_client.sadd(_get_user_conversations_key(user_id), conversation_id)
+                        logger.info(f"[session] Re-synced ownership for {conversation_id} -> {user_id} from Supabase.")
+                        is_member = True
+                except Exception as db_err:
+                    logger.error(f"[session] Supabase ownership fallback failed: {db_err}")
+            if not is_member:
+                logger.warning(f"[session] Conversation {conversation_id} not found for user {user_id}.")
+                return None
     except Exception as e:
         logger.error(f"[session] Error validating conversation ownership for {user_id}/{conversation_id}: {e}")
         raise RuntimeError(f"Failed to validate conversation ownership: {e}") from e
@@ -238,7 +240,7 @@ def get_conversation_history(user_id: str, conversation_id: str) -> Optional[Red
     if conversation_id not in SESSIONS[user_id]:
         logger.info(f"[session] Initializing new conversation entry for user {user_id}, conversation: {conversation_id}")
 
-        persisted_data = load_conversation_data_from_redis(conversation_id)
+        persisted_data = load_conversation_data_from_db(conversation_id)
 
         try:
             redis_history = RedisChatMessageHistory(session_id=conversation_id, redis_client=redis_client)

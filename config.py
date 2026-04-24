@@ -56,8 +56,11 @@ PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 TAVILY_KEY = os.getenv("TAVILY_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL")
 
-# ΓöÇΓöÇΓöÇ AUTH & SECURITY ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-# JWT secret for token signing.
+# ─── DATABASE CONFIGURATION ────────────────────────────────────────────────────
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# ─── AUTH & SECURITY ─────────────────────────────────────────────────────────
 JWT_SECRET_ENV = os.getenv("JWT_SECRET")
 ALLOW_LEGACY_AUTH = os.getenv("ALLOW_LEGACY_AUTH", "false").lower() == "true"
 ENFORCE_STRONG_JWT_SECRET = os.getenv("ENFORCE_STRONG_JWT_SECRET", "true").lower() == "true"
@@ -175,6 +178,9 @@ if not PINECONE_API_KEY:
 if not REDIS_URL:
     logger.error("ERROR: REDIS_URL is required for session/memory management.")
     sys.exit(1)
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    logger.warning("WARNING: SUPABASE_URL or SUPABASE_KEY is missing. Database persistence might fail.")
 
 if not JWT_SECRET_ENV and not ENFORCE_STRONG_JWT_SECRET:
     logger.warning("WARNING: Using dynamically generated random JWT_SECRET. Set JWT_SECRET in .env for production.")

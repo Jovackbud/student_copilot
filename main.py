@@ -30,7 +30,7 @@ from config import (
 )
 from models import ChatRequest, ConversationItem, NewConversationRequest
 from session_manager import (
-    SESSIONS, get_conversation_history, save_conversation_data_to_redis,
+    SESSIONS, get_conversation_history, save_conversation_data_to_db,
     create_new_conversation_id, get_user_conversation_ids,
     load_user_learning_method, save_user_learning_method
 )
@@ -304,13 +304,19 @@ class TokenRequest(BaseModel):
 @app.post("/auth/register", tags=["Authentication"])
 @limiter.limit(RATE_LIMIT_AUTH)
 async def register_user(request: Request, req: UserRegistration):
-    """Registers a new user, saving their profile securely to Redis."""
+    """Registers a new user, saving their profile securely to Supabase and cache."""
     from llm_setup import redis_client as r
+    from database import get_supabase
     import hashlib
     import secrets
 
-    # Check if user exists
-    if r.exists(f"user:{req.username}:profile"):
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database persistence not configured.")
+
+    # Check if user exists in Supabase
+    existing_user = supabase.table('users').select('username').eq('username', req.username).execute()
+    if existing_user.data:
         raise HTTPException(status_code=400, detail="Username already exists.")
 
     if req.role == "admin" and req.username not in ADMIN_IDS:
@@ -325,14 +331,21 @@ async def register_user(request: Request, req: UserRegistration):
         "password_hash": stored_hash,
         "role": req.role,
         "full_name": req.full_name,
-        "age": str(req.age) if req.age else "",
+        "age": req.age,
         "country": req.country or "",
         "class_id": req.class_id or "",
         "subjects": req.subjects or "",
-        "learning_method": "" # Initialize empty learning strategy
+        "learning_method": ""
     }
     
-    r.hset(f"user:{req.username}:profile", mapping=profile_data)
+    try:
+        supabase.table('users').insert(profile_data).execute()
+    except Exception as e:
+        logger.error(f"[auth] Supabase registration error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register user to database.")
+    
+    # Save a cached version as strings for fast fallback
+    r.hset(f"user:{req.username}:profile", mapping={k: str(v) if v is not None else "" for k, v in profile_data.items()})
     
     # If registering as teacher, add to dynamic admin set
     if req.role == "admin":
@@ -354,16 +367,20 @@ async def register_user(request: Request, req: UserRegistration):
 @limiter.limit(RATE_LIMIT_AUTH)
 async def login_for_token(request: Request, req: TokenRequest):
     """Authenticates a user and issues a JWT."""
-    from llm_setup import redis_client as r
+    from database import get_supabase
     import hashlib
 
     validate_safe_string(req.username, "username")
     
-    profile = r.hgetall(f"user:{req.username}:profile")
-    if not profile:
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database persistence not configured.")
+        
+    res = supabase.table('users').select('*').eq('username', req.username).execute()
+    if not res.data:
         raise HTTPException(status_code=401, detail="Invalid username or password.")
     
-    profile = {k.decode(errors='replace'): v.decode(errors='replace') for k, v in profile.items()}
+    profile = res.data[0]
     stored_hash = profile.get("password_hash")
     
     is_valid = False
@@ -382,6 +399,11 @@ async def login_for_token(request: Request, req: TokenRequest):
     token = create_jwt(req.username, role)
     
     logger.info(f"[auth] Login successful for {req.username} (role={role})")
+    
+    # Sync fast cache just in case
+    from llm_setup import redis_client as r
+    r.hset(f"user:{req.username}:profile", mapping={k: str(v) if v is not None else "" for k, v in profile.items()})
+    
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -393,14 +415,18 @@ async def login_for_token(request: Request, req: TokenRequest):
 
 @app.get("/users/me", tags=["Authentication"])
 async def get_my_profile(user_id: str = Depends(get_current_user)):
-    """Returns the current user's personalized data."""
-    from llm_setup import redis_client as r
+    """Returns the current user's personalized data from Supabase."""
+    from database import get_supabase
     
-    profile = r.hgetall(f"user:{user_id}:profile")
-    if not profile:
-        raise HTTPException(status_code=404, detail="User profile not found in Redis.")
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database persistence not configured.")
         
-    profile_out = {k.decode(errors='replace'): v.decode(errors='replace') for k, v in profile.items()}
+    res = supabase.table('users').select('*').eq('username', user_id).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="User profile not found in Supabase.")
+        
+    profile_out = res.data[0]
     # Remove auth secrets before returning
     profile_out.pop("password_hash", None)
     
@@ -473,29 +499,31 @@ async def end_conversation(conversation_id: str, user_id: str = Depends(get_curr
         if conv_history_obj is None:
             raise HTTPException(status_code=400, detail="Invalid conversation ID")
 
-        conversation_data = SESSIONS[user_id][conversation_id]
-        profile = conversation_data.get("profile", {})
+        # Acquire lock — prevents race with concurrent /chat mutations (BUG-06 fix)
+        async with _get_conv_lock(conversation_id):
+            conversation_data = SESSIONS[user_id][conversation_id]
+            profile = conversation_data.get("profile", {})
 
-        global_method = load_user_learning_method(user_id) or profile.get("learning_method", "")
+            global_method = load_user_learning_method(user_id) or profile.get("learning_method", "")
 
-        messages = conv_history_obj.messages
-        chat_history_str = "\n".join([f"{msg.type}: {msg.content}" for msg in messages])
+            messages = conv_history_obj.messages
+            chat_history_str = "\n".join([f"{msg.type}: {msg.content}" for msg in messages])
 
-        from ai_summarizer import evaluate_session_learning_method
-        new_method = await evaluate_session_learning_method(profile, chat_history_str, global_method)
+            from ai_summarizer import evaluate_session_learning_method
+            new_method = await evaluate_session_learning_method(profile, chat_history_str, global_method)
 
-        if new_method and new_method != global_method:
-            save_user_learning_method(user_id, new_method)
-            conversation_data["profile"]["learning_method"] = new_method
-            save_conversation_data_to_redis(
-                conversation_id,
-                conversation_data["profile"],
-                conversation_data["summaries"],
-                conversation_data.get("title", "Untitled Chat")
-            )
-            return {"status": "updated", "learning_method": new_method}
+            if new_method and new_method != global_method:
+                save_user_learning_method(user_id, new_method)
+                conversation_data["profile"]["learning_method"] = new_method
+                save_conversation_data_to_db(
+                    conversation_id,
+                    conversation_data["profile"],
+                    conversation_data["summaries"],
+                    conversation_data.get("title", "Untitled Chat")
+                )
+                return {"status": "updated", "learning_method": new_method}
 
-        return {"status": "unchanged", "learning_method": global_method}
+            return {"status": "unchanged", "learning_method": global_method}
 
     except HTTPException:
         raise
@@ -548,7 +576,7 @@ async def upload_file(
             os.unlink(tmp_path)
 
     conversation_data["summaries"].append({"filename": file.filename, "summary": summary})
-    save_conversation_data_to_redis(
+    save_conversation_data_to_db(
         conversation_id,
         conversation_data["profile"],
         conversation_data["summaries"],
@@ -615,7 +643,7 @@ async def chat(
             elif global_method and "learning_method" not in conversation_data["profile"]:
                 conversation_data["profile"]["learning_method"] = global_method
 
-            save_conversation_data_to_redis(
+            save_conversation_data_to_db(
                 req.conversation_id,
                 conversation_data["profile"],
                 conversation_data["summaries"],

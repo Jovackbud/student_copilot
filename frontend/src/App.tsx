@@ -38,6 +38,7 @@ function App() {
   const [mode, setMode] = useState<'general' | 'notebook' | 'revision'>('general');
   const [activeSubject, setActiveSubject] = useState('');
   const [view, setView] = useState<'student' | 'teacher'>('student');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -201,6 +202,7 @@ function App() {
         method: 'POST',
         headers: headers
       });
+      checkAuthExpiry(res);
       const data = await res.json();
       if (data.learning_method) {
         setProfile(prev => ({ ...prev, learning_method: data.learning_method }));
@@ -250,8 +252,8 @@ function App() {
     return (
       <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
         <div style={{ position: 'fixed', top: '1rem', right: '1rem', zIndex: 100, display: 'flex', gap: '1rem' }}>
-          <button onClick={() => setView('student')} style={{ background: 'var(--border)', color: 'var(--text)' }}>Back to App</button>
-          <button onClick={handleLogout} style={{ background: '#ef4444', color: 'white' }}>Logout</button>
+          <button onClick={() => setView('student')} className="ghost">Back to App</button>
+          <button onClick={handleLogout} className="danger">Logout</button>
         </div>
         <TeacherPortal userId={currentUser!} />
       </div>
@@ -262,30 +264,32 @@ function App() {
     <div className="app-container">
       <div className="sidebar">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>{mode === 'general' ? 'Sovereign Tutor' : mode === 'notebook' ? 'Notebook Oracle' : 'Revision Hub'}</h2>
+          <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
+             {mode === 'general' ? 'Student OS' : mode === 'notebook' ? 'Notebook' : 'Revision'}
+          </h2>
           <div style={{ display: 'flex', gap: '0.4rem' }}>
             {currentRole === 'admin' && (
-              <button onClick={() => setView('teacher')} style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>Admin</button>
+              <button onClick={() => setView('teacher')} className="ghost" style={{ padding: '0.4rem 0.6rem', fontSize: '0.7rem' }}>Teacher Panel</button>
             )}
-            <button onClick={handleLogout} style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem', background: '#ef4444', border: 'none', color: 'white' }}>Exit</button>
+            <button onClick={handleLogout} className="danger" style={{ padding: '0.4rem 0.6rem', fontSize: '0.7rem' }}>Exit</button>
           </div>
         </div>
         
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+        <div className="mode-toggle" style={{ marginBottom: '1rem' }}>
           <button 
-            style={{ flex: 1, padding: '0.5rem', opacity: mode === 'general' ? 1 : 0.5, border: mode === 'general' ? '1px solid var(--accent)' : 'none' }}
+            className={mode === 'general' ? 'active' : ''}
             onClick={() => setMode('general')}
           >
             Tutor
           </button>
           <button 
-            style={{ flex: 1, padding: '0.5rem', opacity: mode === 'notebook' ? 1 : 0.5, border: mode === 'notebook' ? '1px solid var(--accent)' : 'none' }}
+            className={mode === 'notebook' ? 'active' : ''}
             onClick={() => { setMode('notebook'); setMessages([]); setConvId('notebook_temp_' + Date.now()); }}
           >
             Notebook
           </button>
           <button 
-            style={{ flex: 1, padding: '0.5rem', opacity: mode === 'revision' ? 1 : 0.5, border: mode === 'revision' ? '1px solid var(--accent)' : 'none' }}
+            className={mode === 'revision' ? 'active' : ''}
             onClick={() => setMode('revision')}
           >
             Revision
@@ -300,8 +304,8 @@ function App() {
             : 'Socratic Assessment. Personalized exams from textbooks.'}
         </p>
 
-        {(mode === 'notebook' || mode === 'revision') && (
-          <div className="form-group">
+        {mode === 'notebook' || mode === 'revision' ? (
+          <div className="form-group" style={{ marginTop: '1rem' }}>
             <label>Active Subject</label>
             <input 
               placeholder="e.g. Biology" 
@@ -309,42 +313,32 @@ function App() {
               onChange={e => setActiveSubject(e.target.value)} 
             />
           </div>
-        )}
+        ) : null}
         
-        <div className="form-group">
-          <label>Name</label>
-          <input name="name" type="text" value={profile.name} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-        </div>
-        <div className="form-group">
-          <label>Age</label>
-          <input name="age" type="text" value={profile.age} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-        </div>
-        <div className="form-group">
-          <label>Country</label>
-          <input name="country" type="text" value={profile.country} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-        </div>
-        <div className="form-group">
-          <label>Education Grade</label>
-          <input name="grade" type="text" value={profile.grade} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-        </div>
-        
-        {mode !== 'revision' && (
-          <div className="form-group" style={{ marginTop: 'auto' }}>
-            <label>Context Upload</label>
-            <input type="file" onChange={handleUpload} disabled={uploading || (mode === 'general' && !convId)} style={{ background: 'transparent', padding: '0.5rem 0' }} />
-            {uploading && <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>Processing & Vectorizing...</span>}
-          </div>
-        )}
-
-        {mode === 'general' && (
-          <button 
-            onClick={handleEndSession} 
-            disabled={loading || !convId}
-            style={{ marginTop: '1rem', background: 'var(--border)', color: 'var(--text)' }}
-          >
-            End Session & Analyze Profile
+        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+          <button className="ghost" onClick={() => setIsSettingsOpen(true)} style={{ width: '100%', textAlign: 'left', padding: '1rem' }}>
+             ⚙️ View Settings & Profile
           </button>
-        )}
+
+          {mode !== 'revision' && (
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Upload Study Material</label>
+              <input type="file" onChange={handleUpload} disabled={uploading || (mode === 'general' && !convId)} style={{ padding: '0.5rem', fontSize: '0.8rem', background: 'rgba(0,0,0,0.3)' }} />
+              {uploading && <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', marginTop: '0.2rem' }}>Processing vector logic...</span>}
+            </div>
+          )}
+
+          {mode === 'general' && (
+            <button 
+              className="ghost"
+              onClick={handleEndSession} 
+              disabled={loading || !convId}
+              style={{ padding: '1rem' }}
+            >
+              End Session & Sync Mind
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="main-chat">
@@ -353,9 +347,9 @@ function App() {
           ) : (
             <div className="chat-messages">
               {messages.length === 0 && (
-                <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-dim)' }}>
-                  <h3>student_copilot OS Ready</h3>
-                  <p>Configure profile left. Upload context. Chat below.</p>
+                <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  <h3 style={{ color: 'var(--text-primary)' }}>Student OS Online</h3>
+                  <p style={{ opacity: 0.8 }}>Secure workspace initialized. How can I assist you today?</p>
                 </div>
               )}
               {messages.map((m, i) => (
@@ -389,11 +383,52 @@ function App() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={loading || (mode === 'general' && !convId)}
+              style={{ flex: 1 }}
             />
-            <button type="submit" disabled={loading || !input.trim() || (mode === 'general' && !convId)}>Send</button>
+            <button type="submit" className="primary" disabled={loading || !input.trim() || (mode === 'general' && !convId)}>
+               Send 
+            </button>
           </form>
         )}
       </div>
+
+      {isSettingsOpen && (
+        <div className="modal-overlay" onClick={() => setIsSettingsOpen(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-primary)' }}>Profile & Settings</h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+              Your profile helps the AI personalize your tutor experience.
+            </p>
+            <div className="form-group">
+              <label>Full Name</label>
+              <input name="name" type="text" value={profile.name} onChange={handleProfileChange} disabled={mode !== 'general'}/>
+            </div>
+            <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div>
+                <label>Age</label>
+                <input name="age" type="text" value={profile.age} onChange={handleProfileChange} disabled={mode !== 'general'}/>
+              </div>
+              <div>
+                <label>Country</label>
+                <input name="country" type="text" value={profile.country} onChange={handleProfileChange} disabled={mode !== 'general'}/>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Education Grade / Class</label>
+              <input name="grade" type="text" value={profile.grade} onChange={handleProfileChange} disabled={mode !== 'general'}/>
+            </div>
+            {profile.learning_method && (
+              <div className="form-group" style={{ marginTop: '1rem' }}>
+                <label>Identified Learning Style</label>
+                <textarea readOnly value={profile.learning_method} style={{ height: '80px', opacity: 0.8 }} />
+              </div>
+            )}
+            <button className="primary" onClick={() => setIsSettingsOpen(false)} style={{ width: '100%', marginTop: '1rem' }}>
+              Close Settings
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

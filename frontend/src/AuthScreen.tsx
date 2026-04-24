@@ -83,7 +83,7 @@ export const AuthScreen: React.FC<{ onLogin: (userId: string, role: string) => v
                     {isLogin ? 'Enter your credentials.' : 'Initialize your learning context.'}
                 </p>
 
-                <div className="role-toggle">
+                <div className="mode-toggle" style={{ marginBottom: '2rem' }}>
                     <button 
                         className={role === 'student' ? 'active' : ''} 
                         onClick={() => setRole('student')}
@@ -145,7 +145,7 @@ export const AuthScreen: React.FC<{ onLogin: (userId: string, role: string) => v
 
                     {error && <div className="error-message">{error}</div>}
 
-                    <button type="submit" className="btn-primary auth-submit" disabled={loading}>
+                    <button type="submit" className="primary auth-submit" style={{ width: '100%', marginTop: '1rem', padding: '1rem' }} disabled={loading}>
                         {loading ? 'Processing...' : (isLogin ? 'Authenticate' : 'Establish Context')}
                     </button>
                 </form>
@@ -157,134 +157,6 @@ export const AuthScreen: React.FC<{ onLogin: (userId: string, role: string) => v
                     </button>
                 </p>
             </div>
-
-            <style>{`
-                .auth-container {
-                    min-height: 100vh;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    background: var(--bg);
-                    color: var(--text);
-                    padding: 2rem;
-                }
-                .auth-card {
-                    background: var(--bg-card);
-                    padding: 3rem;
-                    border-radius: 12px;
-                    width: 100%;
-                    max-width: 500px;
-                    border: 1px solid var(--border);
-                    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-                }
-                .auth-card h1 {
-                    margin-top: 0;
-                    margin-bottom: 0.5rem;
-                    font-size: 2rem;
-                    background: linear-gradient(45deg, var(--accent), #a855f7);
-                    -webkit-background-clip: text;
-                    -webkit-text-fill-color: transparent;
-                    text-align: center;
-                }
-                .subtitle {
-                    text-align: center;
-                    color: var(--text-dim);
-                    margin-bottom: 2rem;
-                    font-size: 0.9rem;
-                }
-                .role-toggle {
-                    display: flex;
-                    gap: 1rem;
-                    margin-bottom: 2rem;
-                    background: #1e293b;
-                    padding: 0.5rem;
-                    border-radius: 8px;
-                }
-                .role-toggle button {
-                    flex: 1;
-                    padding: 0.8rem;
-                    border: none;
-                    background: transparent;
-                    color: var(--text-dim);
-                    border-radius: 6px;
-                    font-weight: bold;
-                    cursor: pointer;
-                    transition: all 0.2s;
-                }
-                .role-toggle button.active {
-                    background: var(--accent);
-                    color: white;
-                }
-                .auth-form {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 1.2rem;
-                }
-                .form-row {
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
-                    gap: 1rem;
-                }
-                .form-group label {
-                    display: block;
-                    font-size: 0.8rem;
-                    margin-bottom: 0.4rem;
-                    color: var(--text-dim);
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                }
-                .form-group label span {
-                    color: #64748b;
-                    font-size: 0.7rem;
-                    text-transform: none;
-                }
-                .form-group input {
-                    width: 100%;
-                    padding: 0.8rem;
-                    background: var(--bg);
-                    border: 1px solid var(--border);
-                    color: var(--text);
-                    border-radius: 6px;
-                    box-sizing: border-box;
-                }
-                .form-group input:focus {
-                    outline: 1px solid var(--accent);
-                    border-color: var(--accent);
-                }
-                .auth-submit {
-                    margin-top: 1rem;
-                    padding: 1rem;
-                    font-size: 1.1rem;
-                    cursor: pointer;
-                    background: var(--accent);
-                    border: none;
-                    color: white;
-                    font-weight: bold;
-                    border-radius: 6px;
-                }
-                .error-message {
-                    color: #ef4444;
-                    background: rgba(239, 68, 68, 0.1);
-                    padding: 0.8rem;
-                    border-radius: 6px;
-                    font-size: 0.9rem;
-                    border: 1px solid rgba(239, 68, 68, 0.2);
-                }
-                .toggle-mode {
-                    text-align: center;
-                    margin-top: 2rem;
-                    color: var(--text-dim);
-                    font-size: 0.9rem;
-                }
-                .text-btn {
-                    background: none;
-                    border: none;
-                    color: var(--accent);
-                    font-weight: bold;
-                    cursor: pointer;
-                    font-size: 0.9rem;
-                }
-            `}</style>
         </div>
     );
 };
