@@ -16,7 +16,6 @@ interface Profile {
   country: string;
   grade: string;
   learning_method?: string;
-  [key: string]: any;
 }
 
 interface Message {
@@ -25,32 +24,47 @@ interface Message {
 }
 
 function App() {
+  // Auth
   const [currentUser, setCurrentUser] = useState<string | null>(localStorage.getItem('current_user'));
   const [currentRole, setCurrentRole] = useState<string | null>(localStorage.getItem('current_role'));
 
+  // Navigation
+  const [tab, setTab] = useState<'chat' | 'revision'>('chat');
+  const [teacherTab, setTeacherTab] = useState<'upload' | 'materials'>('upload');
+
+  // Profile (hidden from default view)
   const [profile, setProfile] = useState<Profile>({ name: '', age: '', country: '', grade: '' });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Chat state
   const [convId, setConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  
-  const [mode, setMode] = useState<'general' | 'notebook' | 'revision'>('general');
   const [activeSubject, setActiveSubject] = useState('');
-  const [view, setView] = useState<'student' | 'teacher'>('student');
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const prevConvRef = useRef<string | null>(null);
 
-  // Auto-scroll
+  // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Load Profile from backend config upon login
+  // Auto-dismiss toast
   useEffect(() => {
-    async function loadProfile() {
-      if (!currentUser) return;
+    if (toast) {
+      const t = setTimeout(() => setToast(null), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
+
+  // Load profile on login
+  useEffect(() => {
+    if (!currentUser) return;
+    (async () => {
       try {
         const headers = await authHeaders(currentUser);
         const res = await fetch(`${API_BASE}/users/me`, { headers });
@@ -58,56 +72,92 @@ function App() {
         if (res.ok) {
           const data = await res.json();
           setProfile({
-             name: data.full_name || '',
-             age: data.age || '',
-             country: data.country || '',
-             grade: data.class_id || '',
-             learning_method: data.learning_method || ''
+            name: data.full_name || '',
+            age: data.age || '',
+            country: data.country || '',
+            grade: data.class_id || '',
+            learning_method: data.learning_method || ''
           });
-          if (data.role === 'teacher') setView('teacher');
         }
       } catch (err) {
-        console.error("Failed to load profile", err);
+        console.error('Failed to load profile', err);
       }
-    }
-    loadProfile();
+    })();
   }, [currentUser]);
 
-  // Init conversation — skip for notebook AND revision modes
+  // Init conversation for chat mode
   useEffect(() => {
-    async function init() {
-      if (!currentUser || mode !== 'general') return;
-      if (convId && !convId.startsWith('notebook_temp_')) return;
+    if (!currentUser || currentRole === 'teacher') return;
+    if (tab !== 'chat' || activeSubject) return; // Only for general chat (no subject = general mode)
+    if (convId) return;
+    (async () => {
       try {
         const headers = await authHeaders(currentUser);
         const res = await fetch(`${API_BASE}/conversations/new`, {
-          method: 'POST',
-          headers: headers,
-          body: JSON.stringify({ initial_message: 'Hello' })
+          method: 'POST', headers, body: JSON.stringify({})
         });
         checkAuthExpiry(res);
         const data = await res.json();
         setConvId(data.conversation_id);
       } catch (err) {
-        console.error("Failed to init conversation:", err);
+        console.error('Failed to create conversation', err);
       }
-    }
-    init();
-  }, [mode, currentUser]);
+    })();
+  }, [tab, currentUser, activeSubject]);
 
-  const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setProfile({ ...profile, [e.target.name]: e.target.value });
+  // Silent learning sync — end previous conversation in background
+  const syncLearningProfile = async (convIdToEnd: string) => {
+    if (!currentUser || convIdToEnd.startsWith('notebook_temp_')) return;
+    try {
+      const headers = await authHeaders(currentUser);
+      const res = await fetch(`${API_BASE}/conversations/${convIdToEnd}/end`, {
+        method: 'POST', headers
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.learning_method) {
+          setProfile(prev => ({ ...prev, learning_method: data.learning_method }));
+        }
+      }
+    } catch {} // Silent — never block the user
+  };
+
+  // Sync on tab close / navigate away
+  useEffect(() => {
+    const handleUnload = () => {
+      if (convId && currentUser && !convId.startsWith('notebook_temp_')) {
+        const token = localStorage.getItem(`jwt_${currentUser}`);
+        if (token) {
+          navigator.sendBeacon(
+            `${API_BASE}/conversations/${convId}/end`,
+            new Blob([JSON.stringify({})], { type: 'application/json' })
+          );
+        }
+      }
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
+  }, [convId, currentUser]);
+
+  const handleNewChat = async () => {
+    // Sync previous conversation silently
+    if (convId) {
+      prevConvRef.current = convId;
+      syncLearningProfile(convId);
+    }
+    setMessages([]);
+    setConvId(null);
+    setActiveSubject('');
+    // New conversation will be created by useEffect
   };
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!input.trim()) return;
-    // General mode requires a conversation_id; notebook mode does not
-    if (mode === 'general' && !convId) return;
-    if (mode === 'notebook' && !activeSubject.trim()) {
-      alert('Please enter an Active Subject in the sidebar before asking.');
-      return;
-    }
+    if (!input.trim() || loading) return;
+
+    const isNotebook = !!activeSubject.trim();
+
+    if (!isNotebook && !convId) return;
 
     const userMsg = input.trim();
     setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
@@ -115,42 +165,29 @@ function App() {
     setLoading(true);
 
     try {
-      const endpoint = mode === 'general' ? `${API_BASE}/chat` : `${API_BASE}/notebook/ask`;
-      const bodyPayload = mode === 'general' 
-        ? {
+      const endpoint = isNotebook ? `${API_BASE}/notebook/ask` : `${API_BASE}/chat`;
+      const body = isNotebook
+        ? { question: userMsg, active_subject: activeSubject, active_class: profile.grade }
+        : {
             conversation_id: convId,
             message: userMsg,
             user_profile: {
-              full_name: profile.name,
-              age: profile.age,
-              country: profile.country,
-              class_id: profile.grade
+              full_name: profile.name, age: profile.age,
+              country: profile.country, class_id: profile.grade
             }
-          }
-        : {
-            question: userMsg,
-            active_subject: activeSubject,
-            active_class: profile.grade
           };
 
       const headers = await authHeaders(currentUser!);
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(bodyPayload)
-      });
-      
+      const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
       checkAuthExpiry(res);
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(errorData.detail || `HTTP ${res.status}`);
+        const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
       }
-
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply || data.answer }]);
     } catch (err: any) {
-      console.error(err);
-      setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message || 'Could not reach the server.'}` }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `Something went wrong: ${err.message}` }]);
     } finally {
       setLoading(false);
     }
@@ -158,86 +195,43 @@ function App() {
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
-    // General upload requires convId (query param); notebook upload does not
-    if (mode === 'general' && !convId) return;
     const selectedFile = e.target.files[0];
+    const isNotebook = !!activeSubject.trim();
+
+    if (!isNotebook && !convId) return;
     setUploading(true);
 
     const formData = new FormData();
     formData.append('file', selectedFile);
-    if (mode === 'notebook') {
+    if (isNotebook) {
       formData.append('subject', activeSubject || 'General');
       formData.append('class_id', profile.grade || 'General');
     }
 
     try {
-      const uploadEndpoint = mode === 'general' 
-        ? `${API_BASE}/upload?conversation_id=${convId}` 
-        : `${API_BASE}/notebook/upload`;
-
+      const endpoint = isNotebook
+        ? `${API_BASE}/notebook/upload`
+        : `${API_BASE}/upload?conversation_id=${convId}`;
       const headers = await authHeadersMultipart(currentUser!);
-      const res = await fetch(uploadEndpoint, {
-        method: 'POST',
-        headers: headers,
-        body: formData
-      });
+      const res = await fetch(endpoint, { method: 'POST', headers, body: formData });
       checkAuthExpiry(res);
       const data = await res.json();
-      if (mode === 'notebook' && data.session_id) {
-         setConvId(data.session_id);
-         alert(`Notebook Context uploaded. Extracted ${data.chunks} vector chunks.`);
-      } else {
-         alert(`Upload complete: \n${data.summary?.substring(0, 50)}...`);
+      if (isNotebook && data.chunks) {
+        setToast({ message: `${selectedFile.name} processed — ${data.chunks} study sections created.`, type: 'success' });
+      } else if (data.summary) {
+        setToast({ message: `File uploaded successfully.`, type: 'success' });
       }
     } catch (err) {
-      console.error(err);
-      alert('Upload failed.');
+      setToast({ message: 'Upload failed. Please try again.', type: 'error' });
     } finally {
       setUploading(false);
-    }
-  };
-
-  const handleEndSession = async () => {
-    if (!convId || mode !== 'general') return;
-    setLoading(true);
-    try {
-      const headers = await authHeaders(currentUser!);
-      const res = await fetch(`${API_BASE}/conversations/${convId}/end`, {
-        method: 'POST',
-        headers: headers
-      });
-      checkAuthExpiry(res);
-      const data = await res.json();
-      if (data.learning_method) {
-        setProfile(prev => ({ ...prev, learning_method: data.learning_method }));
-        alert(`Session ended. Permanent Learning Methodology:\n\n${data.learning_method}`);
-      }
-      // Reset state without full page reload (M1 fix)
-      setMessages([]);
-      setConvId(null);
-      setInput('');
-      // Auto-create a new conversation for seamless UX
-      try {
-        const newHeaders = await authHeaders(currentUser!);
-        const newConvRes = await fetch(`${API_BASE}/conversations/new`, {
-          method: 'POST',
-          headers: newHeaders,
-          body: JSON.stringify({})
-        });
-        const newConvData = await newConvRes.json();
-        if (newConvData.conversation_id) setConvId(newConvData.conversation_id);
-      } catch (convErr) {
-        console.error('Failed to create new conversation after session end', convErr);
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Failed to end session properly.');
-    } finally {
-      setLoading(false);
+      e.target.value = '';
     }
   };
 
   const handleLogout = () => {
+    // Sync before logout
+    if (convId) syncLearningProfile(convId);
     localStorage.removeItem('current_user');
     localStorage.removeItem('current_role');
     if (currentUser) localStorage.removeItem(`jwt_${currentUser}`);
@@ -248,191 +242,172 @@ function App() {
     setProfile({ name: '', age: '', country: '', grade: '' });
   };
 
+  // ─── Auth Gate ───────────────────────────────────────────
   if (!currentUser) {
     return <AuthScreen onLogin={(u, r) => { setCurrentUser(u); setCurrentRole(r); }} />;
   }
 
-  if (view === 'teacher') {
+  // ─── Teacher Layout ──────────────────────────────────────
+  if (currentRole === 'teacher') {
     return (
-      <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
-        <div style={{ position: 'fixed', top: '1rem', right: '1rem', zIndex: 100, display: 'flex', gap: '1rem' }}>
-          <button onClick={() => setView('student')} className="ghost">Back to App</button>
-          <button onClick={handleLogout} className="danger">Logout</button>
+      <>
+        <nav className="top-nav">
+          <span className="nav-brand">Student Copilot</span>
+          <div className="nav-tabs">
+            <button className={`nav-tab ${teacherTab === 'upload' ? 'active' : ''}`} onClick={() => setTeacherTab('upload')}>Upload</button>
+            <button className={`nav-tab ${teacherTab === 'materials' ? 'active' : ''}`} onClick={() => setTeacherTab('materials')}>Materials</button>
+          </div>
+          <div className="nav-actions">
+            <button className="nav-icon-btn" onClick={() => setSettingsOpen(true)} title="Settings">⚙</button>
+            <button className="btn-danger" onClick={handleLogout}>Logout</button>
+          </div>
+        </nav>
+        <div className="content-area">
+          <TeacherPortal userId={currentUser} activeTab={teacherTab} />
         </div>
-        <TeacherPortal userId={currentUser!} />
-      </div>
+        {settingsOpen && <SettingsModal profile={profile} onClose={() => setSettingsOpen(false)} />}
+      </>
     );
   }
 
+  // ─── Student Layout ──────────────────────────────────────
+  const isNotebookMode = !!activeSubject.trim();
+
   return (
-    <div className="app-container">
-      <div className="sidebar">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
-             {mode === 'general' ? 'Student OS' : mode === 'notebook' ? 'Notebook' : 'Revision'}
-          </h2>
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
-            {currentRole === 'teacher' && (
-              <button onClick={() => setView('teacher')} className="ghost" style={{ padding: '0.4rem 0.6rem', fontSize: '0.7rem' }}>Teacher Panel</button>
-            )}
-            <button onClick={handleLogout} className="danger" style={{ padding: '0.4rem 0.6rem', fontSize: '0.7rem' }}>Exit</button>
-          </div>
+    <>
+      <nav className="top-nav">
+        <span className="nav-brand">Student Copilot</span>
+        <div className="nav-tabs">
+          <button className={`nav-tab ${tab === 'chat' ? 'active' : ''}`} onClick={() => setTab('chat')}>Chat</button>
+          <button className={`nav-tab ${tab === 'revision' ? 'active' : ''}`} onClick={() => setTab('revision')}>Revision</button>
         </div>
-        
-        <div className="mode-toggle" style={{ marginBottom: '1rem' }}>
-          <button 
-            className={mode === 'general' ? 'active' : ''}
-            onClick={() => setMode('general')}
-          >
-            Tutor
-          </button>
-          <button 
-            className={mode === 'notebook' ? 'active' : ''}
-            onClick={() => { setMode('notebook'); setMessages([]); setConvId('notebook_temp_' + Date.now()); }}
-          >
-            Notebook
-          </button>
-          <button 
-            className={mode === 'revision' ? 'active' : ''}
-            onClick={() => setMode('revision')}
-          >
-            Revision
-          </button>
-        </div>
-
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-          {mode === 'general' 
-            ? 'Longitudinal AI. Adapts to your learning style across sessions.' 
-            : mode === 'notebook' 
-            ? 'Ground truth retrieval. Answers strictly from context.'
-            : 'Socratic Assessment. Personalized exams from textbooks.'}
-        </p>
-
-        {mode === 'notebook' || mode === 'revision' ? (
-          <div className="form-group" style={{ marginTop: '1rem' }}>
-            <label>Active Subject</label>
-            <input 
-              placeholder="e.g. Biology" 
-              value={activeSubject} 
-              onChange={e => setActiveSubject(e.target.value)} 
-            />
-          </div>
-        ) : null}
-        
-        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-          <button className="ghost" onClick={() => setIsSettingsOpen(true)} style={{ width: '100%', textAlign: 'left', padding: '1rem' }}>
-             ⚙️ View Settings & Profile
-          </button>
-
-          {mode !== 'revision' && (
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Upload Study Material</label>
-              <input type="file" onChange={handleUpload} disabled={uploading || (mode === 'general' && !convId)} style={{ padding: '0.5rem', fontSize: '0.8rem', background: 'rgba(0,0,0,0.3)' }} />
-              {uploading && <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', marginTop: '0.2rem' }}>Processing vector logic...</span>}
-            </div>
-          )}
-
-          {mode === 'general' && (
-            <button 
-              className="ghost"
-              onClick={handleEndSession} 
-              disabled={loading || !convId}
-              style={{ padding: '1rem' }}
-            >
-              End Session & Sync Mind
+        <div className="nav-actions">
+          {tab === 'chat' && (
+            <button className="btn-ghost" onClick={handleNewChat} style={{ fontSize: '0.78rem', padding: '0.45rem 0.75rem' }}>
+              + New Chat
             </button>
           )}
+          <button className="nav-icon-btn" onClick={() => setSettingsOpen(true)} title="Settings">⚙</button>
+          <button className="btn-danger" onClick={handleLogout}>Logout</button>
         </div>
-      </div>
+      </nav>
 
-      <div className="main-chat">
-          {mode === 'revision' ? (
-              <RevisionMode userId={currentUser!} />
-          ) : (
+      <div className="content-area">
+        {tab === 'revision' ? (
+          <RevisionMode userId={currentUser} />
+        ) : (
+          <>
+            {/* Chat toolbar — subject selector */}
+            <div className="chat-toolbar">
+              <input
+                className="subject-select"
+                type="text"
+                placeholder="Subject (optional)"
+                value={activeSubject}
+                onChange={e => setActiveSubject(e.target.value)}
+              />
+              <span className="chat-mode-label">
+                {isNotebookMode
+                  ? `Studying ${activeSubject} from your materials`
+                  : 'General tutor — ask anything'}
+              </span>
+            </div>
+
+            {/* Messages */}
             <div className="chat-messages">
               {messages.length === 0 && (
-                <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                  <h3 style={{ color: 'var(--text-primary)' }}>Student OS Online</h3>
-                  <p style={{ opacity: 0.8 }}>Secure workspace initialized. How can I assist you today?</p>
+                <div className="chat-empty">
+                  <h3>{profile.name ? `Hi ${profile.name.split(' ')[0]}!` : 'Welcome!'}</h3>
+                  <p>
+                    {isNotebookMode
+                      ? `Ask me anything about ${activeSubject}. I'll answer from your study materials.`
+                      : 'What would you like to study today? Type a subject above to study from your materials, or just ask me anything.'}
+                  </p>
                 </div>
               )}
               {messages.map((m, i) => (
                 <div key={i} className={`message ${m.role}`}>
-                  {m.role === 'user' ? (
-                    m.content
-                  ) : (
-                    <ReactMarkdown
-                      remarkPlugins={[remarkMath, remarkGfm]}
-                      rehypePlugins={[rehypeKatex]}
-                    >
+                  {m.role === 'user' ? m.content : (
+                    <ReactMarkdown remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]}>
                       {m.content}
                     </ReactMarkdown>
                   )}
                 </div>
               ))}
               {loading && (
-                <div className="message assistant" style={{ opacity: 0.7 }}>
-                  Reasoning...
-                </div>
+                <div className="message assistant" style={{ opacity: 0.6 }}>Thinking...</div>
               )}
               <div ref={messagesEndRef} />
             </div>
-          )}
-        
-        {mode !== 'revision' && (
-          <form className="chat-input-area" onSubmit={handleSend}>
-            <input
-              type="text"
-              placeholder="Query the sovereign context..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={loading || (mode === 'general' && !convId)}
-              style={{ flex: 1 }}
-            />
-            <button type="submit" className="primary" disabled={loading || !input.trim() || (mode === 'general' && !convId)}>
-               Send 
-            </button>
-          </form>
+
+            {/* Input bar */}
+            <form className="chat-input-bar" onSubmit={handleSend}>
+              <div className="btn-upload-icon" title={uploading ? 'Uploading...' : 'Upload file'}>
+                {uploading ? '⏳' : '📎'}
+                <input type="file" onChange={handleUpload} disabled={uploading || (!isNotebookMode && !convId)} />
+              </div>
+              <input
+                type="text"
+                placeholder="Ask me anything..."
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                disabled={loading || (!isNotebookMode && !convId)}
+              />
+              <button type="submit" className="btn-send" disabled={loading || !input.trim() || (!isNotebookMode && !convId)}>
+                Send
+              </button>
+            </form>
+          </>
         )}
       </div>
 
-      {isSettingsOpen && (
-        <div className="modal-overlay" onClick={() => setIsSettingsOpen(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-primary)' }}>Profile & Settings</h2>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-              Your profile helps the AI personalize your tutor experience.
-            </p>
-            <div className="form-group">
-              <label>Full Name</label>
-              <input name="name" type="text" value={profile.name} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-            </div>
-            <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              <div>
-                <label>Age</label>
-                <input name="age" type="text" value={profile.age} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-              </div>
-              <div>
-                <label>Country</label>
-                <input name="country" type="text" value={profile.country} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-              </div>
-            </div>
-            <div className="form-group">
-              <label>Education Grade / Class</label>
-              <input name="grade" type="text" value={profile.grade} onChange={handleProfileChange} disabled={mode !== 'general'}/>
-            </div>
-            {profile.learning_method && (
-              <div className="form-group" style={{ marginTop: '1rem' }}>
-                <label>Identified Learning Style</label>
-                <textarea readOnly value={profile.learning_method} style={{ height: '80px', opacity: 0.8 }} />
-              </div>
-            )}
-            <button className="primary" onClick={() => setIsSettingsOpen(false)} style={{ width: '100%', marginTop: '1rem' }}>
-              Close Settings
-            </button>
-          </div>
+      {settingsOpen && <SettingsModal profile={profile} onClose={() => setSettingsOpen(false)} />}
+
+      {toast && (
+        <div className={`toast ${toast.type}`}>
+          {toast.message}
+          <button className="toast-close" onClick={() => setToast(null)}>×</button>
         </div>
       )}
+    </>
+  );
+}
+
+// ─── Settings Modal ─────────────────────────────────────────
+function SettingsModal({ profile, onClose }: { profile: Profile; onClose: () => void }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-body" onClick={e => e.stopPropagation()}>
+        <h2>Settings</h2>
+
+        <div className="field">
+          <label>Name</label>
+          <input type="text" value={profile.name} readOnly />
+        </div>
+        <div className="field-row">
+          <div className="field">
+            <label>Age</label>
+            <input type="text" value={profile.age || '—'} readOnly />
+          </div>
+          <div className="field">
+            <label>Country</label>
+            <input type="text" value={profile.country || '—'} readOnly />
+          </div>
+        </div>
+        <div className="field">
+          <label>Class</label>
+          <input type="text" value={profile.grade || '—'} readOnly />
+        </div>
+
+        {profile.learning_method && (
+          <div className="field">
+            <label>Identified Learning Style</label>
+            <textarea readOnly value={profile.learning_method} rows={4} style={{ opacity: 0.8, resize: 'none' }} />
+          </div>
+        )}
+
+        <button className="btn-primary" onClick={onClose} style={{ marginTop: '0.5rem' }}>Close</button>
+      </div>
     </div>
   );
 }
