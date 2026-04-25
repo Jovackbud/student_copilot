@@ -205,6 +205,14 @@ async def get_current_user(
     raise HTTPException(status_code=401, detail="Authentication required. Send a valid JWT Bearer token.")
 
 
+@app.get("/")
+async def root() -> Dict[str, str]:
+    return {
+        "service": "student_copilot API",
+        "status": "online",
+        "message": "Sovereign AI Tutor Backend is running."
+    }
+
 @app.get("/health")
 async def health_check() -> Dict[str, str]:
     from session_manager import redis_client as r
