@@ -1,6 +1,7 @@
 # main.py ΓÇö Sovereign AI Tutor Backend (Production-Hardened)
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from typing import Dict, Any, Optional, List
 import uuid
 import tempfile
@@ -205,8 +206,17 @@ async def get_current_user(
     raise HTTPException(status_code=401, detail="Authentication required. Send a valid JWT Bearer token.")
 
 
+# ─── Frontend dist detection (built by nixpacks during Railway deploy) ─────
+_FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+_FRONTEND_INDEX = os.path.join(_FRONTEND_DIST, "index.html")
+_HAS_FRONTEND = os.path.isfile(_FRONTEND_INDEX)
+if _HAS_FRONTEND:
+    logger.info(f"[startup] Frontend build detected at {_FRONTEND_DIST}")
+
 @app.get("/")
-async def root() -> Dict[str, str]:
+async def root():
+    if _HAS_FRONTEND:
+        return FileResponse(_FRONTEND_INDEX)
     return {
         "service": "student_copilot API",
         "status": "online",
@@ -1178,6 +1188,23 @@ async def evaluate_exam(
         logger.error(f"[revision] Evaluation failed: {e}")
         raise HTTPException(status_code=500, detail="Exam evaluation failed.")
 
+
+# =============================================================================
+# FRONTEND STATIC FILE SERVING (must be AFTER all API routes)
+# =============================================================================
+if _HAS_FRONTEND:
+    # Serve Vite build assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="frontend_assets")
+
+    # SPA catch-all: any GET path not matched by API routes serves index.html
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        file_path = os.path.join(_FRONTEND_DIST, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(_FRONTEND_INDEX)
+
+    logger.info("[startup] SPA catch-all route registered.")
 
 # =============================================================================
 # SERVER ENTRY POINT

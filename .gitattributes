@@ -1,0 +1,4 @@
+# Force LF line endings for files that run on Linux containers (Railway/Docker)
+*.sh            text eol=lf
+railway.toml    text eol=lf
+nixpacks.toml   text eol=lf

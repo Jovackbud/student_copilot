@@ -1,5 +1,11 @@
-# nixpacks.toml — Force Python provider, prevent Node.js detection from frontend/
+# nixpacks.toml — Build Python backend + Vite frontend in one container
 providers = ["python"]
 
+[phases.setup]
+nixPkgs = ["nodejs_20", "npm"]
+
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["pip install -r requirements.txt", "cd frontend && npm ci"]
+
+[phases.build]
+cmds = ["cd frontend && VITE_API_BASE='' npm run build"]

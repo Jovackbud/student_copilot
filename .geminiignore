@@ -2,3 +2,9 @@
 .env
 .env.*
 !.env.example
+
+# Local Environment Variables
+.env.local
+.env.production
+.env.development
+.env.test
