@@ -1,11 +1,14 @@
 # nixpacks.toml — Build Python backend + Vite frontend in one container
 providers = ["python"]
 
+# "..." preserves the Python provider's default packages (python3, gcc, pip)
 [phases.setup]
-nixPkgs = ["nodejs_20", "npm"]
+nixPkgs = ["...", "nodejs-18_x"]
 
+# "..." preserves default pip install, then add frontend deps
 [phases.install]
-cmds = ["pip install -r requirements.txt", "cd frontend && npm ci"]
+cmds = ["...", "cd frontend && npm ci"]
 
+# Build the Vite frontend with empty API base (same-origin relative URLs)
 [phases.build]
 cmds = ["cd frontend && VITE_API_BASE='' npm run build"]
