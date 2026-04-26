@@ -112,12 +112,13 @@ try:
         # Added socket_timeout and socket_connect_timeout to prevent complete service hang on Redis outage
         redis_client = redis.Redis.from_url(REDIS_URL, socket_timeout=5, socket_connect_timeout=5)
         redis_client.ping() # Test connection
-        logger.info(f"[startup] Redis client initialized successfully for URL: {REDIS_URL}") # Changed from print
+        from config import redact_for_logs
+        logger.info(f"[startup] Redis client initialized successfully (url_hash={redact_for_logs(REDIS_URL)})")
     else:
         logger.error("ERROR: REDIS_URL is not set. Cannot initialize Redis client.") # Changed from print
         sys.exit(1)
 except Exception as e:
-    logger.error(f"[startup] Failed to initialize Redis client for URL {REDIS_URL}: {e}") # Changed from print
+    logger.error(f"[startup] Failed to initialize Redis client: {e}")
     sys.exit(1)
 
 _ensure_pinecone_index()
