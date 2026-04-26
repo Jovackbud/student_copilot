@@ -1,0 +1,10 @@
+# railway.toml — Explicit deployment config (no guessing)
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
